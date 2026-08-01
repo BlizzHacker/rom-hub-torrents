@@ -1,7 +1,7 @@
 [plugin]
 slug        = "torrents"
 name        = "Torrents"
-version     = "0.2.0"
+version     = "0.3.0"
 rpp_version = "1"
 license     = "MIT"
 
