@@ -8,10 +8,10 @@ different amount of knowledge about the same object:
     https://archive.org/...      a .torrent file, located
     <archive.org identifier>     an item; its torrent has to be looked up
 
-Only the last one needs the network, and it is the only host in the
-manifest. The other three resolve offline, which is what lets this plugin
-reach a torrent from a source it has never heard of without the manifest
-having to name that source -- see `_from_info_hash`.
+Only the last one needs the network, and archive.org is the only host this
+plugin fetches from. The other three resolve offline, which is what lets
+this plugin reach a torrent from a source it has never heard of without the
+manifest having to name that source -- see `_from_info_hash`.
 
 The host does the rest: it fetches the .torrent, computes the info-hash
 from the bytes that actually arrived, checks it against whatever this
@@ -33,6 +33,44 @@ DOWNLOAD = "https://archive.org/download/"
 
 #: Archive.org names its torrent this way, and marks it with this `format`.
 TORRENT_FORMAT = "Archive BitTorrent"
+
+#: Open public trackers, announced to by the operator's client and never by
+#: this plugin or the Hub. Every host here is declared in `manifest.toml`,
+#: because the host gates each `tr=` by hostname against that list and silently
+#: drops the rest -- so a tracker that is not in both places does nothing.
+#:
+#: This list is why a magnet from this plugin starts promptly. Without a
+#: tracker a client has only DHT, which is slow to bootstrap and blocked
+#: outright on plenty of networks; with one it can announce and get peers
+#: immediately. Bounded well under the host's MAX_ANNOUNCE_URLS of 64.
+DEFAULT_TRACKERS = (
+    "udp://tracker.opentrackr.org:1337/announce",
+    "udp://open.demonii.com:1337/announce",
+    "udp://open.tracker.cl:1337/announce",
+    "udp://tracker.publictracker.xyz:6969/announce",
+    "udp://tracker.wildkat.net:6969/announce",
+    "udp://tracker.qu.ax:6969/announce",
+    "udp://tracker.peerfect.org:6969/announce",
+    "udp://tracker.opentrackr.com:6969/announce",
+    "udp://tracker.ilibr.org:6969/announce",
+    "udp://tracker.filemail.com:6969/announce",
+    "udp://tracker.ducks.party:1984/announce",
+    "udp://tracker.dler.org:6969/announce",
+    "udp://tracker.corpscorp.online:80/announce",
+    "udp://tracker.bittor.pw:1337/announce",
+    "udp://tracker.auctor.tv:6969/announce",
+    "udp://tracker.0x7c0.com:6969/announce",
+    "udp://tracker-udp.gbitt.info:80/announce",
+    "udp://torrentclub.online:1984/announce",
+    "udp://t.overflow.biz:6969/announce",
+)
+
+#: Hostnames of the above, which is what an incoming tracker is filtered
+#: against. Derived from the list rather than written twice, so the two cannot
+#: drift apart.
+_DECLARED_TRACKER_HOSTS = frozenset(
+    urlsplit(t).hostname or "" for t in DEFAULT_TRACKERS
+)
 
 _HEX40 = re.compile(r"[0-9a-fA-F]{40}")
 _BASE32 = re.compile(r"[A-Z2-7]{32}")
@@ -103,22 +141,64 @@ class Torrents(TorrentProvider):
 
         return self._from_archive_item(raw, title)
 
+    # -- trackers ----------------------------------------------------------
+
+    def _announce_list(self, carried: list[str]) -> tuple[list[str], int]:
+        """The trackers to put on a magnet, and how many were discarded.
+
+        Two sources, both filtered against the hosts the manifest declares:
+
+        * the ones the incoming magnet carried, kept only when `keep_trackers`
+          is on. Filtering rather than passing through is deliberate -- the
+          host would drop an undeclared tracker anyway, and dropping it here
+          means the count reported back is the truth rather than a number that
+          changes again later.
+        * the declared public ones, appended when `add_trackers` is on, which
+          is what stops a magnet being DHT-only.
+
+        Order is preserved and duplicates removed, so a tracker the magnet
+        already named does not appear twice.
+        """
+        keep = bool(self.ctx.config.get("keep_trackers"))
+        add = self.ctx.config.get("add_trackers")
+        add = True if add is None else bool(add)
+
+        chosen: list[str] = []
+        seen: set[str] = set()
+        dropped = 0
+
+        for url in carried:
+            host = urlsplit(url).hostname or ""
+            if keep and host in _DECLARED_TRACKER_HOSTS:
+                if url not in seen:
+                    seen.add(url)
+                    chosen.append(url)
+            else:
+                dropped += 1
+
+        if add:
+            for url in DEFAULT_TRACKERS:
+                if url not in seen:
+                    seen.add(url)
+                    chosen.append(url)
+
+        return chosen, dropped
+
     # -- a magnet somebody already has -------------------------------------
 
     def _from_magnet(self, uri: str, title: str | None) -> TorrentSource:
-        """Reduce a magnet to what this plugin can honestly stand behind.
+        """Take a magnet apart and reassemble it from parts that will pass.
 
         A magnet is a bundle: an info-hash, which names bytes, plus trackers
         and web seeds, which name hosts. The host checks every one of those
         hosts against this plugin's allowlist -- correctly, because they are
-        contacted -- and an indexer's magnet names trackers no static manifest
-        could have declared. Passing them through unchanged would make every
-        such magnet fail at the gate.
+        contacted -- and an indexer's magnet names trackers no manifest could
+        have declared in advance. Passing them through unchanged would make
+        every such magnet fail at the gate.
 
-        So by default the info-hash is kept and the locations are dropped: a
-        trackerless magnet, resolvable over DHT by the client the operator
-        already runs. `keep_trackers` puts them back for an operator whose
-        allowlist genuinely covers them.
+        So the info-hash is kept, undeclared locations are dropped, and the
+        declared public trackers are added in their place. What comes back is
+        the same torrent, announced somewhere that will answer.
         """
         split = urlsplit(uri)
         query = split.query or split.path.lstrip("?")
@@ -126,7 +206,8 @@ class Torrents(TorrentProvider):
         if not pairs:
             raise TorrentRefused(f"that magnet carries no parameters: {uri!r}")
 
-        hashes, names, trackers, seeds = [], [], [], []
+        hashes, names, carried = [], [], []
+        seeds = 0
         for key, value in pairs:
             if key == "xt":
                 urn = value.strip()
@@ -143,9 +224,13 @@ class Torrents(TorrentProvider):
             elif key == "dn":
                 names.append(value.strip())
             elif key == "tr":
-                trackers.append(value.strip())
+                carried.append(value.strip())
             elif key == "ws":
-                seeds.append(value.strip())
+                # A web seed is fetched by the Hub itself and gets the ordinary
+                # https-and-declared-host gate. None of the hosts an indexer
+                # names is in this manifest, so carrying them forward would
+                # only produce refusals; they are counted and left behind.
+                seeds += 1
 
         if not hashes:
             raise TorrentRefused(
@@ -158,26 +243,18 @@ class Torrents(TorrentProvider):
             )
 
         display = title or (names[0] if names else None)
-        keep = bool(self.ctx.config.get("keep_trackers"))
-        if keep and (trackers or seeds):
-            return TorrentSource(
-                kind="magnet",
-                source=self._magnet(hashes[0], display, trackers, seeds),
-                name=display,
-                info_hash=hashes[0],
-                extra={"origin": "magnet", "trackers": str(len(trackers)),
-                       "web_seeds": str(len(seeds))},
-            )
+        trackers, dropped = self._announce_list(carried)
         return TorrentSource(
             kind="magnet",
-            source=self._magnet(hashes[0], display),
+            source=self._magnet(hashes[0], display, trackers),
             name=display,
             info_hash=hashes[0],
             extra={
                 "origin": "magnet",
-                # Said plainly, because it changes how the torrent resolves:
-                # without a tracker the client needs DHT to find peers.
-                "trackers_dropped": str(len(trackers) + len(seeds)),
+                "trackers": str(len(trackers)),
+                # Said plainly, because it is the operator's cue that this
+                # magnet no longer announces where the original one did.
+                "trackers_dropped": str(dropped + seeds),
             },
         )
 
@@ -194,28 +271,30 @@ class Torrents(TorrentProvider):
         pasted, without the manifest having to declare any of them and without
         the sandbox being loosened by one host.
 
+        The declared trackers are what make it usable rather than merely valid:
+        a bare info-hash resolves only over DHT, and with them the client has
+        somewhere to announce the moment it starts.
+
         What it costs is the file manifest: with no .torrent to read, the host
         cannot list what is inside until the client resolves it.
         """
+        trackers, _ = self._announce_list([])
         return TorrentSource(
             kind="magnet",
-            source=self._magnet(info_hash, title),
+            source=self._magnet(info_hash, title, trackers),
             name=title,
             info_hash=info_hash,
-            extra={"origin": "info-hash"},
+            extra={"origin": "info-hash", "trackers": str(len(trackers))},
         )
 
     @staticmethod
     def _magnet(info_hash: str, name: str | None,
-                trackers: list[str] | None = None,
-                seeds: list[str] | None = None) -> str:
+                trackers: list[str] | None = None) -> str:
         params = [("xt", f"urn:btih:{info_hash}")]
         if name:
             params.append(("dn", name))
         for t in trackers or []:
             params.append(("tr", t))
-        for w in seeds or []:
-            params.append(("ws", w))
         return "magnet:?" + urlencode(params)
 
     # -- a .torrent URL ----------------------------------------------------
@@ -249,6 +328,12 @@ class Torrents(TorrentProvider):
         of what it holds, and lists it in the item's own metadata with a
         `btih` -- so the info-hash is known without fetching the torrent, and
         becomes a cross-check on the bytes the host later receives.
+
+        Nothing is added to this one. The .torrent already carries the
+        Archive's own trackers and, more usefully, https web seeds pointing
+        back at archive.org -- which is the fastest path there is, because a
+        single named file can be pulled straight over https and checked
+        against the digest the torrent itself declares, with no peers at all.
 
         Presence is *tested*, never inferred from an item's collections. An
         item in `stream_only` was expected to publish no torrent, and
