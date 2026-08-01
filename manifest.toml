@@ -1,7 +1,7 @@
 [plugin]
 slug        = "torrents"
 name        = "Torrents"
-version     = "0.1.0"
+version     = "0.2.0"
 rpp_version = "1"
 license     = "MIT"
 
@@ -9,18 +9,60 @@ license     = "MIT"
 torrent = "rom_hub_torrents.torrent:Torrents"
 
 [permissions]
-# The only host this plugin fetches from. Every other source it resolves is
-# handed back as an info-hash, which names bytes rather than a location and so
-# needs no allowlist entry at all -- see the README, "Any source, one currency".
-network  = ["archive.org", "*.archive.org"]
+# Two different kinds of host, both declared here because the host checks both
+# against this one list.
+#
+#   archive.org        fetched by the Hub -- item metadata, the .torrent, and
+#                      the https web seeds a single-file fetch reads from.
+#                      `*.archive.org` also covers bt1/bt2.archive.org, whose
+#                      trackers every Archive.org torrent announces to.
+#
+#   the rest           announced to by YOUR torrent client, never fetched by
+#                      the Hub. They are open public trackers, declared so a
+#                      magnet can carry trackers at all: the host gates every
+#                      `tr=` by hostname against this list, so an undeclared
+#                      tracker is dropped and the magnet falls back to DHT --
+#                      which is the slow path this list exists to avoid.
+#
+# Read this list before installing. It is the complete set of hosts this
+# plugin can cause traffic to.
+network = [
+  "archive.org",
+  "*.archive.org",
+
+  "tracker.opentrackr.org",
+  "tracker.opentrackr.com",
+  "open.demonii.com",
+  "open.tracker.cl",
+  "tracker.publictracker.xyz",
+  "tracker.wildkat.net",
+  "tracker.qu.ax",
+  "tracker.peerfect.org",
+  "tracker.ilibr.org",
+  "tracker.filemail.com",
+  "tracker.ducks.party",
+  "tracker.dler.org",
+  "tracker.corpscorp.online",
+  "tracker.bittor.pw",
+  "tracker.auctor.tv",
+  "tracker.0x7c0.com",
+  "tracker-udp.gbitt.info",
+  "torrentclub.online",
+  "t.overflow.biz",
+]
 romm_api = []
 
 [config]
-# Pass a magnet's own trackers and web seeds through instead of reducing it to
-# its info-hash. Off by default: those are network locations, the host checks
-# each one against the allowlist above, and a magnet from an indexer will name
-# trackers this plugin has no business declaring. Turn it on only if you have
-# added those hosts to a catalog you control.
+# Append the declared public trackers to every magnet this plugin returns.
+# On by default, and it is the difference between a torrent that starts and one
+# that sits waiting: a magnet with no `tr=` has only DHT to find peers on, which
+# is slow to bootstrap and blocked outright on some networks.
+add_trackers = { type = "bool", default = true }
+
+# Keep the trackers a magnet already carried, as well. Only those whose host is
+# in the allowlist above survive the host's check; the rest are dropped and
+# counted. Off by default because an indexer's magnet names private trackers
+# that would announce your client somewhere you did not choose.
 keep_trackers = { type = "bool", default = false }
 
 # Which Archive.org files to name as wanted. "payload" selects the item's own
