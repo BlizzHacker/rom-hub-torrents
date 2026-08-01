@@ -121,12 +121,33 @@ def normalise_info_hash(value: str) -> str | None:
 
 
 class Torrents(TorrentProvider):
+    def _display_title(self, raw: str, title: str | None) -> str | None:
+        """A human name, and never the identifier we were handed.
+
+        The CLI passes the source id through as the result's title when it
+        knows nothing better, so `title` is routinely the magnet URI or the
+        info-hash itself. Using that as a magnet's `dn=` nests a URI inside a
+        URI and tells the operator nothing they did not just type. A title
+        that is only the input again is therefore dropped, and the magnet's
+        own `dn=` -- which is a real name -- is preferred instead.
+        """
+        if not title:
+            return None
+        candidate = title.strip()
+        if not candidate or candidate == raw.strip():
+            return None
+        if urlsplit(candidate).scheme.lower() in {"magnet", "http", "https"}:
+            return None
+        if normalise_info_hash(candidate):
+            return None
+        return candidate
+
     def resolve(self, result: SearchResult) -> TorrentSource:
         raw = (result.source_id or "").strip()
         if not raw:
             raise TorrentRefused("the search result carries no source id")
 
-        title = (result.title or "").strip() or None
+        title = self._display_title(raw, result.title)
         scheme = urlsplit(raw).scheme.lower()
 
         if scheme == "magnet":
