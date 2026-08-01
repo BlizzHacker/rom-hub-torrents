@@ -1,0 +1,30 @@
+[plugin]
+slug        = "torrents"
+name        = "Torrents"
+version     = "0.1.0"
+rpp_version = "1"
+license     = "MIT"
+
+[capabilities]
+torrent = "rom_hub_torrents.torrent:Torrents"
+
+[permissions]
+# The only host this plugin fetches from. Every other source it resolves is
+# handed back as an info-hash, which names bytes rather than a location and so
+# needs no allowlist entry at all -- see the README, "Any source, one currency".
+network  = ["archive.org", "*.archive.org"]
+romm_api = []
+
+[config]
+# Pass a magnet's own trackers and web seeds through instead of reducing it to
+# its info-hash. Off by default: those are network locations, the host checks
+# each one against the allowlist above, and a magnet from an indexer will name
+# trackers this plugin has no business declaring. Turn it on only if you have
+# added those hosts to a catalog you control.
+keep_trackers = { type = "bool", default = false }
+
+# Which Archive.org files to name as wanted. "payload" selects the item's own
+# originals and leaves the Archive's derivatives -- thumbnails, the metadata
+# XML, the sqlite index -- out of the selection. "all" names nothing, which
+# means the whole torrent.
+archive_files = { type = "str", default = "payload" }
