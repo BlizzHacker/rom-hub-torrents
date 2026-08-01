@@ -30,6 +30,13 @@ network = [
   "archive.org",
   "*.archive.org",
 
+  # Flashpoint Archive publishes its own torrents here -- 220,567 preserved
+  # web games and animations. Declared so the .torrent itself can be fetched
+  # and read; the payload is moved by your torrent client, not by the Hub.
+  "download.unstable.life",
+  "unstable.life",
+  "*.unstable.life",
+
   "tracker.opentrackr.org",
   "tracker.opentrackr.com",
   "open.demonii.com",
