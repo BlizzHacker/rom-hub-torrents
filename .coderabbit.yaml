@@ -1,0 +1,100 @@
+# yaml-language-server: $schema=https://storage.googleapis.com/coderabbit_public_assets/schema.v2.json
+language: en-US
+tone_instructions: >-
+  Be direct; skip praise and preamble. This is a ROM Hub source plugin: a Python
+  package normalizing upstream data into the ROM Hub catalog schema. Prioritize
+  plugin-contract correctness, network robustness, and licensing accuracy.
+early_access: false
+enable_free_tier: true
+
+reviews:
+  profile: chill
+  request_changes_workflow: false
+  high_level_summary: true
+  review_status: true
+  collapse_walkthrough: true
+  changed_files_summary: true
+  sequence_diagrams: false
+  estimate_code_review_effort: true
+  assess_linked_issues: true
+  related_issues: true
+  related_prs: true
+  suggested_labels: true
+  auto_apply_labels: false
+  suggested_reviewers: false
+  in_progress_fortune: false
+  poem: false
+  enable_prompt_for_ai_agents: true
+  abort_on_close: true
+
+  slop_detection:
+    enabled: true
+    label: slop
+
+  path_filters:
+    - "!**/*.min.js"
+    - "!**/dist/**"
+    - "!**/build/**"
+    - "!**/*.lock"
+    - "!**/vendor/**"
+    - "!**/__pycache__/**"
+    - "!**/*.dat"
+    - "!**/*.xml.gz"
+
+  path_instructions:
+    - path: "manifest.toml"
+      instructions: >-
+        This is the plugin's declaration to ROM Hub. Verify the id matches the
+        repository name, the declared platforms use canonical ROM Hub platform
+        slugs (not vendor-specific aliases), and any license/attribution field
+        accurately reflects the upstream source's actual terms. A plugin that
+        claims a permissive license for content that is not permissively
+        licensed is a serious defect, not a nitpick.
+    - path: "**/*.py"
+      instructions: >-
+        Flag network calls without an explicit timeout, unbounded retries, and
+        pagination loops that can spin forever when the upstream API returns a
+        constant next-page cursor. Upstream sources are frequently unreliable
+        third-party archives: partial failure must degrade gracefully rather
+        than abort the whole catalog run.
+
+        Check that upstream fields are validated before being written into the
+        catalog schema. Silent type coercion of a missing or malformed upstream
+        field into an empty string is a bug, because it propagates junk metadata
+        downstream into every consumer.
+
+        Do not suggest adding type hints, docstrings, or logging purely for
+        completeness where the surrounding code does not already use them.
+    - path: "tests/**"
+      instructions: >-
+        Tests must not make live network calls. Flag any test that hits a real
+        upstream host instead of a recorded fixture.
+
+  auto_review:
+    enabled: true
+    auto_incremental_review: true
+    drafts: false
+    ignore_usernames:
+      - dependabot
+      - dependabot[bot]
+
+  tools:
+    ruff:
+      enabled: true
+    gitleaks:
+      enabled: true
+    semgrep:
+      enabled: true
+    markdownlint:
+      enabled: false
+    languagetool:
+      enabled: false
+
+chat:
+  art: false
+  auto_reply: true
+
+knowledge_base:
+  opt_out: false
+  learnings:
+    scope: auto
